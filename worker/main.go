@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/smtp"
@@ -13,33 +15,54 @@ import (
 )
 
 type EmailJob struct {
-	To      string `json:"to"`
-	Subject string `json:"subject"`
-	Body    string `json:"body"`
+	CommandName string `json:"commandName"`
+	To          string `json:"to"`
+	Subject     string `json:"subject"`
+	HtmlContent string `json:"htmlContent"`
 }
 
-func sendEmail(job *EmailJob) error {
-	from := "example@example.com"
-	password := "my-email-password"
+func sendEmail(to string, htmlContent string) error {
+	from := "hoge-email@example.com"
+	password := "hoge-email-password"
 	smtpHost := "smtp.example.com"
 	smtpPort := "587"
 
 	auth := smtp.PlainAuth("", from, password, smtpHost)
-	to := []string{job.To}
-	msg := []byte("To: " + job.To + "\r\n" +
-		"Subject: " + job.Subject + "\r\n" +
-		"\r\n" +
-		job.Body + "\r\n")
 
-	return smtp.SendMail(smtpHost+":"+smtpPort, auth, from, to, msg)
+	header := make(map[string]string)
+	header["From"] = from
+	header["To"] = to
+	header["Subject"] = "Password Reset"
+	header["MIME-Version"] = "1.0"
+	header["Content-Type"] = `text/html; charset="utf-8"`
+	header["Content-Transfer-Encoding"] = "base64"
+
+	var message bytes.Buffer
+	for k, v := range header {
+		message.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	}
+	message.WriteString("\r\n")
+
+	encodedContent := base64.StdEncoding.EncodeToString([]byte(htmlContent))
+	lineMaxLength := 76
+	for i := 0; i < len(encodedContent); i++ {
+		if i > 0 && i%lineMaxLength == 0 {
+			message.WriteString("\r\n")
+		}
+		message.WriteByte(encodedContent[i])
+	}
+
+	err := smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{to}, message.Bytes())
+	if err != nil {
+		fmt.Printf("Error while sending email: %v\n", err)
+	} else {
+		fmt.Println("Email sent successfully")
+	}
+	return nil
 }
 
-func processJob(ctx context.Context, rdb *redis.Client, jobData string) error {
-	var job EmailJob
-	if err := json.Unmarshal([]byte(jobData), &job); err != nil {
-		return err
-	}
-	return sendEmail(&job)
+func processJob(job EmailJob) error {
+	return sendEmail(job.To, job.HtmlContent)
 }
 
 func main() {
@@ -52,13 +75,13 @@ func main() {
 		DB:       0,
 	})
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-
 	ctx := context.Background()
 
-	// Job queue key in Redis
-	jobQueueKey := "job_queue"
+	queueName := "default"
+	jobQueueKey := fmt.Sprintf("queues:%s", queueName)
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	for {
 		select {
@@ -77,7 +100,14 @@ func main() {
 				continue
 			}
 
-			err = processJob(ctx, rdb, job[1])
+			var emailJob EmailJob
+			err = json.Unmarshal([]byte(job[1]), &emailJob)
+			if err != nil {
+				fmt.Printf("Error while unmarshalling job: %v\n", err)
+				continue
+			}
+
+			err = processJob(emailJob)
 			if err != nil {
 				fmt.Println("Error processing job:", err)
 			}
