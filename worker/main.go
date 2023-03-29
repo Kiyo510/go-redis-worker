@@ -9,6 +9,7 @@ import (
 	"net/smtp"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/go-redis/redis/v8"
@@ -83,10 +84,13 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	var wg sync.WaitGroup
+
 	for {
 		select {
 		case <-stop:
-			fmt.Println("Gracefully shutting down...")
+			fmt.Println("Gracefully shutting down... Waiting for running jobs to complete.")
+			wg.Wait()
 			err := rdb.Close()
 			if err != nil {
 				fmt.Println(err)
@@ -107,10 +111,15 @@ func main() {
 				continue
 			}
 
-			err = processJob(emailJob)
-			if err != nil {
-				fmt.Println("Error processing job:", err)
-			}
+			wg.Add(1) // ジョブが開始されたため、WaitGroupにカウントを追加
+			go func() {
+				defer wg.Done() // ジョブが完了したらWaitGroupのカウントをデクリメント
+
+				err = processJob(emailJob)
+				if err != nil {
+					fmt.Println("Error processing job:", err)
+				}
+			}()
 		}
 	}
 }
