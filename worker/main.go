@@ -11,29 +11,28 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-
-	"github.com/go-redis/redis/v8"
 )
 
 type EmailJob struct {
-	CommandName string `json:"commandName"`
+	CommandName string `json:"command_name"`
 	To          string `json:"to"`
 	Subject     string `json:"subject"`
-	HtmlContent string `json:"htmlContent"`
+	HtmlContent string `json:"html_content"`
 }
 
-func sendEmail(to string, htmlContent string) error {
-	from := "hoge-email@example.com"
-	password := "hoge-email-password"
-	smtpHost := "smtp.example.com"
-	smtpPort := "587"
+func sendEmail(to, htmlContent, subject string) error {
+	from := "info@example.net"
+	password := "password"
+	smtpHost := "localhost"
+	smtpPort := "1025"
+	auth := smtp.PlainAuth("", "maildev", password, smtpHost)
 
-	auth := smtp.PlainAuth("", from, password, smtpHost)
-
+	// 件名をUTF-8に変換してエンコード
+	subject = "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(subject)) + "?="
 	header := make(map[string]string)
 	header["From"] = from
 	header["To"] = to
-	header["Subject"] = "Password Reset"
+	header["Subject"] = subject
 	header["MIME-Version"] = "1.0"
 	header["Content-Type"] = `text/html; charset="utf-8"`
 	header["Content-Transfer-Encoding"] = "base64"
@@ -56,22 +55,20 @@ func sendEmail(to string, htmlContent string) error {
 	err := smtp.SendMail(smtpHost+":"+smtpPort, auth, from, []string{to}, message.Bytes())
 	if err != nil {
 		fmt.Printf("Error while sending email: %v\n", err)
-	} else {
-		fmt.Println("Email sent successfully")
+		return err
 	}
+	fmt.Println("Email sent successfully")
+
 	return nil
 }
 
 func processJob(job EmailJob) error {
-	return sendEmail(job.To, job.HtmlContent)
+	return sendEmail(job.To, job.HtmlContent, job.Subject)
 }
 
 func main() {
-	redisHost := os.Getenv("REDIS_HOST")
-	redisPort := os.Getenv("REDIS_PORT")
-
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%s", redisHost, redisPort),
+		Addr:     "localhost:6379",
 		Password: "",
 		DB:       0,
 	})
@@ -79,7 +76,7 @@ func main() {
 	ctx := context.Background()
 
 	queueName := "default"
-	jobQueueKey := fmt.Sprintf("queues:%s", queueName)
+	jobQueueKey := fmt.Sprintf("%s", queueName)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
